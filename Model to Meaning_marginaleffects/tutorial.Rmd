@@ -1,0 +1,221 @@
+---
+title: 'Model to Meaning: useR 2025'
+author: "Kevin Madden"
+date: "`r Sys.Date()`"
+output: html_notebook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(pacman)
+p_load(marginaleffects, tidyverse, modelsummary, tinytable)
+
+dat <- get_dataset('thornton')
+datasummary_skim(dat, histogram = F)
+
+mod <- glm(outcome ~ distance + incentive + agecat,
+           family = binomial,
+           data = dat)
+modelsummary(mod)
+summary(mod)
+```
+
+Coefficients -> Predictions -> Comparisons
+Step 1: Fit a model
+Step 2: Use coefficients and data to make a prediction
+Step 3: Compare counterfactual predictions
+
+
+## Null hypothesis test
+Can we reject the null hypothesis that a coefficient--or a function of coefficients-- is equal to some value $H_0$?
+
+```{r hypothesis-test}
+h <- hypotheses(mod)
+h
+colnames(h)
+h$estimate
+h$std.error
+
+hypotheses(mod, hypothesis = 1.9)
+```
+
+$\beta_4 = \beta_5$  
+$\beta_4 - \beta_5 = 0$
+
+```{r}
+coef(mod)
+coef(mod)[4] - coef(mod)[5]
+
+hypotheses(mod, hypothesis = 'b4 - b5 = 0')
+```
+
+Function on left-hand side:
+difference ~
+ratio ~
+
+Estimates to compare on the right-hand side:
+~ reference
+~ sequential
+~ pairwise
+
+```{r}
+hypotheses(mod, hypothesis = difference ~ reference)
+```
+
+## Predictions
+
+```{r}
+head(dat)
+
+# Linear regression
+mod <- lm (outcome ~ incentive + distance, data = dat)
+summary(mod)
+
+beta <- coef(mod)
+beta
+
+nd <- data.frame(incentive = 1, distance = 1)
+nd
+
+p <- predictions (mod, newdata = nd)
+p
+
+# Logistic regression
+mod <- glm(outcome ~ incentive + distance, family = binomial, data = dat)
+beta <- coef(mod)
+beta
+
+beta[1] + beta[2] * 1 + beta[3] * 1
+plogis(beta[1] + beta[2] * 1 + beta[3] * 1)
+
+predictions(mod, type = 'link', newdata = nd)
+predictions(mod, newdata = nd)
+
+# Ordinal logit - look into this
+p_load(MASS)
+tmp <- polr(agecat ~ incentive + distance, data = dat)
+predictions(tmp, newdata = nd)
+```
+
+## Grid
+Grid is a collection of profiles
+
+```{r}
+nd <- data.frame(incentive = c(0,1), distance = 1)
+predictions(mod, newdata = nd)
+
+# Using datagrid function
+predictions(mod,
+            newdata = datagrid(incentive = unique, distance = c(1,2))
+            )
+# Empirical distribution - predictions for each observation
+predictions(mod)
+```
+
+## Aggregation
+
+```{r}
+p <- predictions(mod, type = 'response')
+nrow(p)
+
+mean(p$estimate)
+# or
+avg_predictions(mod)#, type = 'response')
+
+mod <- glm(outcome ~ incentive + distance + agecat, data = dat,
+           family = binomial)
+```
+
+Are average predictions equal?
+
+```{r}
+avg_predictions(mod, by = 'agecat', hypothesis = 'b3 - b1 = 0')
+
+avg_predictions(mod, by = 'agecat', hypothesis = difference ~ pairwise)
+```
+
+# Plot
+
+```{r}
+plot_predictions(mod, condition = c('distance', 'agecat'))
+```
+## Comparisons
+```{r}
+mod <- glm(outcome ~ incentive * agecat * distance, data = dat, family = binomial)
+summary(mod)
+
+nd <- data.frame(incentive = c(0,1), agecat = '18 to 35', distance = 2)
+nd
+
+p <- predictions(mod, newdata = nd)
+p$estimate
+
+p$estimate[2] - p$estimate[1]
+
+# Risk difference
+comparisons(mod,
+            variables = 'incentive',
+            newdata = datagrid(agecat = '18 to 35', distance = 2))
+
+# Risk ratio
+p$estimate[2]/p$estimate[1]
+comparisons(mod,
+            comparison = 'ratio',
+            variables = 'incentive',
+            newdata = datagrid(agecat = '18 to 35', distance = 2))
+
+# Numeric predictors
+# What is the "effect" of various increases, see ?comparisons for details
+
+nd <- data.frame(incentive = 0, agecat = '>35', distance = 2)
+comparisons(mod, variables = list(distance = 1), newdata = nd)
+
+comparisons(mod, variables = list(distance = 'sd'), newdata = nd)
+
+comparisons(mod, variables = list(distance = c(1,5)), newdata = nd)
+
+# Categorical predictors
+
+comparisons(mod, variables = list(agecat = 'sequential'), newdata = nd)
+
+comparisons(mod, variables = list(agecat = 'reference'), newdata = nd)
+
+comparisons(mod, variables = list(agecat = 'pairwise'), newdata = nd)
+```
+
+```{r}
+nd <- data.frame(incentive = 0:1, agecat = '>35', distance = 2)
+comparisons(mod,
+            variables = list(distance = c(2,4)),
+            newdata = datagrid(agecat = c('18 to 35', '>35')))
+
+cmp <- comparisons(mod)
+cmp
+nrow(cmp)
+
+cmp %>% summarize(mean(estimate), .by = c(term, contrast))
+avg_comparisons(mod)
+
+avg_comparisons(mod, variables = 'incentive', by = 'agecat')
+
+avg_comparisons(mod, variables = 'incentive', by = 'agecat', hypothesis = 'b1 = b2')
+avg_comparisons(mod, variables = 'incentive', by = 'agecat', hypothesis = difference ~ reference)
+
+# look into equivalence test argument
+
+plot_comparisons(mod, variables = 'incentive',
+                 condition = c('distance', 'agecat'))
+```
+
+# predictions for non-representative data
+multilevel regression and post stratification (MrP)
+1. MR: estimate a regression model using individual non representative data
+2. P: weight the predictions of the model by the population shares of each subgroup.
+
+```{r}
+p_load(ggridges, brms)
+```
+
